@@ -1,5 +1,6 @@
 envs/
 data/
+data_root/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
