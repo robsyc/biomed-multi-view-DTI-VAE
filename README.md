@@ -16,10 +16,12 @@ Particularly, we aim to:
 1. Unify the approach with findings from D. Illiadis' work on Multi-branch Neural Networks
   - [Multi‑target prediction for dummies using two‑branch neural networks](https://doi.org/10.1007/s10994-021-06104-5)
   - [A Comparison of Embedding Aggregation Strategies in Drug-Target Interaction Prediction](https://doi.org/10.1101/2023.09.25.559265)
-2. Incorporate a stochastic/sampling strategy to the model through the use of variational autoencoders (VAEs) to structure the latent space and enable conditioned generation of novel drug molecules
-3. Incorporate protein branche(s) to the model
+2. Incorporate protein branche(s) to the model
   - Graph view inspired by the contact-map approach proposed by [M. Jiang et al.](https://doi.org/10.1039/d0ra02297g) and [R. Gorantla et al.](https://doi.org/10.1101/2023.09.25.559265)
   - DNA view
+3. Incorporate a stochastic sampling strategy to the model through the use of variational autoencoders (VAEs) to enable:
+   - Learning a structured latent space
+   - Conditioned generation of novel drug molecules
 4. Evaluate the model on the [DAVIS and KIBA datasets](https://tdcommons.ai/multi_pred_tasks/dti)
 
 
