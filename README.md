@@ -13,10 +13,15 @@ _Figure: Schematic of multi-view architecture. Embeddings from three single view
 Here, we aim to extend and fine-tune the model for drug-target interaction (DTI) prediction between small molecules and proteins from the DAVIS and KIBA datasets.
 
 Particularly, we aim to:
-- Unify the approach with findings from D. Illiadis' work on Multi-branch Neural Networks
+1. Unify the approach with findings from D. Illiadis' work on Multi-branch Neural Networks
   - [Multi‑target prediction for dummies using two‑branch neural networks](https://doi.org/10.1007/s10994-021-06104-5)
   - [A Comparison of Embedding Aggregation Strategies in Drug-Target Interaction Prediction](https://doi.org/10.1101/2023.09.25.559265)
-- 
+2. Incorporate a stochastic/sampling strategy to the model through the use of variational autoencoders (VAEs) to structure the latent space and enable conditioned generation of novel drug molecules
+3. Incorporate protein branche(s) to the model
+  - Graph view inspired by the contact-map approach proposed by [M. Jiang et al.](https://doi.org/10.1039/d0ra02297g) and [R. Gorantla et al.](https://doi.org/10.1101/2023.09.25.559265)
+  - DNA view
+4. Evaluate the model on the [DAVIS and KIBA datasets](https://tdcommons.ai/multi_pred_tasks/dti)
+
 
 # Getting started with `biomed-multi-view-DTI-VAE`
 
