@@ -24,7 +24,6 @@ Particularly, we aim to:
       - Conditioned generation of novel drug molecules
 4. Evaluate the model on the [DAVIS and KIBA datasets](https://tdcommons.ai/multi_pred_tasks/dti)
 
-
 # Getting started with `biomed-multi-view-DTI-VAE`
 
 ## Installation
