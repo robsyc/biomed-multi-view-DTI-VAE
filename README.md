@@ -1,32 +1,26 @@
-# Introduction
+# Context
 
-This repository contains the implementation of the Multi-view Molecular Embedding with Late Fusion (MMELON) architecture presented in our preprint [Multi-view biomedical foundation models for molecule-target and property prediction](https://arxiv.org/abs/2410.19704). MMELON is a flexible approach to aggregate multiple views (sequence, image, graph) of molecules in a foundation model setting. While models based on single view representation typically performs well on some downstream tasks and not others, the multi-view model performs robustly across a wide range of property prediction tasks encompassing ligand-protein binding, molecular solubility, metabolism and toxicity. It has been applied to screen compounds against a large (> 100 targets) set of G Protein-Coupled receptors (GPCRs) to identify strong binders for 33 targets related to Alzheimer’s disease, which are validated through structure-based modeling and identification of key binding motifs.
+This repository was forked from [IBM's Multi-view Molecular Embedding with Late Fusion (MMELON) architecture](https://github.com/BiomedSciAI/biomed-multi-view) presented in their preprint [Multi-view biomedical foundation models for molecule-target and property prediction](https://arxiv.org/abs/2410.19704).
 
-Our model integrates:
-
-* Image Representation: Captures the 2D visual depiction of molecular structures, highlighting features like symmetry, bond angles, and functional groups. Molecular images are generated using RDKit and undergo data augmentation during training to enhance robustness.
-* Graph Representation: Encodes molecules as undirected graphs where nodes represent atoms and edges represent bonds. Atom-specific properties (e.g., atomic number, chirality) and bond-specific properties (e.g., bond type, stereochemistry) are embedded using categorical embedding techniques.
-* Text Representation: Utilizes SMILES strings to represent chemical structures, tokenized with a custom tokenizer. The sequences are embedded using a transformer-based architecture to capture the sequential nature of the chemical information.
-
-The embeddings from these single-view pre-trained encoders are combined using an attention-based aggregator module. This module learns to weight each view appropriately, producing a unified multi-view embedding. This approach leverages the strengths of each representation to improve performance on downstream predictive tasks.
+The model integrates multiple 'views' of molecules, namely, sequence (SMILES), image (RDkit), and graph (RDkit) representations, to learn a unified embedding that can be used for a variety of downstream tasks.
 
 ![MultiView diagram](docs/overview.png)
 
 _Figure: Schematic of multi-view architecture. Embeddings from three single view pre-trained encoders (Image, Graph and Text) are combined by the aggregator module into a combined embedding. The network is finetunable for downstream predictive tasks._
 
-Our pre-training dataset comprises 200 million molecules sourced from the PubChem and ZINC22 chemical databases, ensuring diversity and relevance to downstream tasks. Each view encoder is pre-trained with self-supervised tasks tailored to capture the unique features of its representation.
+# About this repository
 
-MMELON’s extensible architecture allows for seamless integration of additional views, making it a versatile tool for molecular representation learning. For further details, see [here](https://arxiv.org/abs/2410.19704).
+Here, we aim to extend and fine-tune the model for drug-target interaction (DTI) prediction between small molecules and proteins from the DAVIS and KIBA datasets.
 
-# Getting started with `biomed-multi-view`
+Particularly, we aim to:
+- Unify the approach with findings from D. Illiadis' work on Multi-branch Neural Networks
+  - [Multi‑target prediction for dummies using two‑branch neural networks](https://doi.org/10.1007/s10994-021-06104-5)
+  - [A Comparison of Embedding Aggregation Strategies in Drug-Target Interaction Prediction](https://doi.org/10.1101/2023.09.25.559265)
+- 
 
-## Links
-
-1. [Demo Notebook for inference](notebooks/smmv_api_demo.ipynb)
-2. [Contributing code](CONTRIBUTING.md)
+# Getting started with `biomed-multi-view-DTI-VAE`
 
 ## Installation
-Follow these steps to set up the `biomed-multi-view` codebase on your system.
 
 ### Prerequisites
 * Operating System: Linux or macOS
@@ -34,71 +28,7 @@ Follow these steps to set up the `biomed-multi-view` codebase on your system.
 * Conda: Anaconda or Miniconda installed
 * Git: Version control to clone the repository
 
-
-### Step 1: Set up the project directory
-Choose a root directory where you want to install biomed.multi-view. For example:
-
-```bash
-export ROOT_DIR=~/biomed-multiview
-mkdir -p $ROOT_DIR
-```
-
-#### Step 2: Create and activate a Conda environment
-```bash
-conda create -y python=3.11 --prefix $ROOT_DIR/envs/biomed-multiview
-```
-Activate the environment:
-```bash
-conda activate $ROOT_DIR/envs/biomed-multiview
-```
-
-#### Step 3: Clone the repository
-Navigate to the project directory and clone the repository:
-```bash
-mkdir -p $ROOT_DIR/code
-cd $ROOT_DIR/code
-
-# Clone the repository using HTTPS
-git clone https://github.com/BiomedSciAI/biomed-multi-view.git
-
-# Navigate into the cloned repository
-cd biomed-multi-view
-```
-Note: If you prefer using SSH, ensure that your SSH keys are set up with GitHub and use the following command:
-```bash
-git clone git@github.com:BiomedSciAI/biomed-multi-view.git
-```
-
-#### Step 4: Install package dependencies
-If you are installing in a Mac, skip this step and proceed to next step. Else, install the package in editable mode along with development dependencies:
-``` bash
-pip install -e .['dev']
-```
-Install additional requirements:
-``` bash
-pip install -r requirements.txt
-```
-
-#### Step 5: macOS-Specific instructions (Apple Silicon)
-If you are using a Mac with Apple Silicon (M1/M2/M3) and the zsh shell, you may need to disable globbing for the installation command:
-
-``` bash
-noglob pip install -e .[dev]
-```
-Install macOS-specific requirements optimized for Apple’s Metal Performance Shaders (MPS):
-```bash
-pip install -r requirements-mps.txt
-```
-
-#### Step 6:  Installation verification (optional)
-Verify that the installation was successful by running unit tests
-
-```bash
-python -m unittest bmfm_sm.tests.all_tests
-```
-
-#### Summary of commands
-Here’s a consolidated list of commands for quick reference:
+### Set-up commands
 ```bash
 # Set up the root directory
 export ROOT_DIR=~/biomed-multiview
@@ -126,21 +56,7 @@ pip install -r requirements-mps.txt
 python -m unittest bmfm_sm.tests.all_tests
 ```
 
-### Explore the pretrained and finetuned checkpoints from HuggingFace
-
-To explore the pretrained and finetuned models, please refer to the [demo notebook](notebooks/smmv_api_demo.ipynb). This notebook provides detailed examples and explanations on how to use the models effectively. You can launch the notebook from running the following command from a new terminal window.
-
-```bash
-cd $ROOT_DIR/code/biomed-multi-view
-jupyter lab
-```
-Copy the URL displayed on the console and paste it on a browser tab. The URL should look something similar to the below
-```bash
-http://localhost:8888/lab?token=67f8a92c257a82010b4f82b219f7c1ad675ee329e730321e
-```
-Navigate to the notebooks directory in the sidepanel in the Jupyter Lab GUI to locate the notebook named `smmv_api_demo.ipynb`.
-
-#### Get embeddings from the pretrained model
+## Get embeddings from the pretrained model
 
 You can generate embeddings for a given molecule using the pretrained model with the following code. You can excute from cell 1 to 5 in the notebook run the same.
 
@@ -161,45 +77,12 @@ print(example_emb)
 
 This will output the embedding vector for the given molecule.
 
-#### Inference using finetuned model
-You can use the finetuned models to make predictions on new data. You can execute through cell 6 to 8 in the notebook to run the same.
-
-``` python
-from bmfm_sm.api.smmv_api import SmallMoleculeMultiViewModel
-from bmfm_sm.api.dataset_registry import DatasetRegistry
-
-# Initialize the dataset registry
-dataset_registry = DatasetRegistry()
-
-# Example SMILES string
-example_smiles = "CC(C)CC1=CC=C(C=C1)C(C)C(=O)O"
-
-# Get dataset information for BACE (classification task)
-bace_ds = dataset_registry.get_dataset_info('BACE')
-
-# Load the finetuned model for BACE
-finetuned_model_ds = SmallMoleculeMultiViewModel.from_finetuned(
-    bace_ds,
-    model_path="ibm/biomed.sm.mv-te-84m-MoleculeNet-ligand_scaffold-BACE-101",
-    inference_mode=True,
-    huggingface=True
-)
-
-# Get predictions
-bace_prediction = SmallMoleculeMultiViewModel.get_predictions(
-    example_smiles, bace_ds, finetuned_model=finetuned_model_bace
-)
-
-print("BACE Prediction:", bace_prediction)
-```
-
-##### Output:
-```bash
-BACE Prediction: {'prediction': tensor(0, dtype=torch.int32)}
-```
-Note: The outputs are illustrative. Actual predictions may vary depending on the model and data. For more detailed examples and explanations, please refer to the [demo notebook](notebooks/smmv_api_demo.ipynb) cell 8.
+---
+---
+---
 
 ## Data preparation
+
 To evaluate and train the models, you need to set up the necessary data, splits, configuration files, and model checkpoints. This section will guide you through the process.
 
 #### Step 1: Set up the `$data_root` directory
