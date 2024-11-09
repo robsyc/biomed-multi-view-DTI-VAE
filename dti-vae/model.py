@@ -177,9 +177,9 @@ class T5TargetModel(nn.Module):
         outputs = self.model(ids.input_ids,  attention_mask=ids.attention_mask).last_hidden_state
 
         embeddings = []
-        for i in range(embeddings.shape[0]):
+        for i in range(outputs.shape[0]):
             l = len(sequences[i])
-            subseq = embeddings[i, 1:l+1]
+            subseq = outputs[i, 1:l+1]
             embeddings.append(subseq.mean(dim=0))
         
         return torch.stack(embeddings, dim=0)
