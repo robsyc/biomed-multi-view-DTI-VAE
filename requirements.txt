@@ -1,3 +1,9 @@
+torch
+torchvision
+torchaudio
+torch_geometric
+PyTDC
+rdkit
 pyg_lib
 torch_scatter
 torch_cluster

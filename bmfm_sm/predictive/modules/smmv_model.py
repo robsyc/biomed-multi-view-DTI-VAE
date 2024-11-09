@@ -52,9 +52,9 @@ class SmallMoleculeMultiView(nn.Module):
                 assert len(batch[ns.FIELD_LABEL]) == current_output.size(dim=0)
             combined_outputs[model.__class__.__name__] = current_output
 
-        aggregator_output, model_coeffs = self.aggregator(combined_outputs.values())
-        combined_outputs["aggregator"] = aggregator_output
-        combined_outputs["model_coeffs"] = model_coeffs
+        # aggregator_output, model_coeffs = self.aggregator(combined_outputs.values())
+        # combined_outputs["aggregator"] = aggregator_output
+        # combined_outputs["model_coeffs"] = model_coeffs
 
         return combined_outputs
 

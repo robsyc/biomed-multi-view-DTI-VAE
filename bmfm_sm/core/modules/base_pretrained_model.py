@@ -292,8 +292,8 @@ class AttentionalViewAggregator(nn.Module):
     ):
         super().__init__()
         self.arch_type = arch_type
-        logging.info(f"Using {arch_type} architecture for aggregator")
-        logging.info(f"dim_list {dim_list} for aggregator")
+        logging.info(f"Using DTI-VAE architecture for aggregator")
+        logging.info(f"dim_list {dim_list} of Graph2dModel, ImageModel, TextModel")
 
         if self.arch_type == "concat":
             self.output_dim = sum(dim_list)
@@ -304,39 +304,39 @@ class AttentionalViewAggregator(nn.Module):
                 [nn.Linear(dim, min_dim_list) for dim in dim_list]
             )
 
-        if (
-            self.arch_type == "moe_weighted_concat"
-            or self.arch_type == "moe_noised_weighted_concat"
-        ):
-            network_class = (
-                WeightingNetwork
-                if self.arch_type == "moe_weighted_concat"
-                else NoisedWeightingNetwork
-            )
-            if gate_input == "projected":
-                gating_network = network_class(
-                    min(dim_list) * len(dim_list), num_experts=len(dim_list)
-                )
-                self.weighted_concat_network = WeightedConcatenationMoE(
-                    gating_network, dim_list, gate_input="projected"
-                )
-                self.output_dim = min(dim_list) * len(dim_list)
-            elif gate_input == "unprojected":
-                gating_network = network_class(sum(dim_list), num_experts=len(dim_list))
-                self.weighted_concat_network = WeightedConcatenationMoE(
-                    gating_network, dim_list, gate_input="unprojected"
-                )
-                self.output_dim = sum(dim_list)
-            elif gate_input == "both_projected":
-                gating_network = network_class(
-                    min(dim_list) * len(dim_list), num_experts=len(dim_list)
-                )
-                self.weighted_concat_network = WeightedConcatenationMoE(
-                    gating_network, dim_list, gate_input="both_projected"
-                )
-                self.output_dim = min(dim_list)
-            else:
-                raise ValueError("gate_input has to be projected or unprojected")
+        # if (
+        #     self.arch_type == "moe_weighted_concat"
+        #     or self.arch_type == "moe_noised_weighted_concat"
+        # ):
+        #     network_class = (
+        #         WeightingNetwork
+        #         if self.arch_type == "moe_weighted_concat"
+        #         else NoisedWeightingNetwork
+        #     )
+        #     if gate_input == "projected":
+        #         gating_network = network_class(
+        #             min(dim_list) * len(dim_list), num_experts=len(dim_list)
+        #         )
+        #         self.weighted_concat_network = WeightedConcatenationMoE(
+        #             gating_network, dim_list, gate_input="projected"
+        #         )
+        #         self.output_dim = min(dim_list) * len(dim_list)
+        #     elif gate_input == "unprojected":
+        #         gating_network = network_class(sum(dim_list), num_experts=len(dim_list))
+        #         self.weighted_concat_network = WeightedConcatenationMoE(
+        #             gating_network, dim_list, gate_input="unprojected"
+        #         )
+        #         self.output_dim = sum(dim_list)
+        #     elif gate_input == "both_projected":
+        #         gating_network = network_class(
+        #             min(dim_list) * len(dim_list), num_experts=len(dim_list)
+        #         )
+        #         self.weighted_concat_network = WeightedConcatenationMoE(
+        #             gating_network, dim_list, gate_input="both_projected"
+        #         )
+        #         self.output_dim = min(dim_list)
+        #     else:
+        #         raise ValueError("gate_input has to be projected or unprojected")
 
         if self.arch_type == "coeff" or self.arch_type == "coeff_mlp":
             self.w_before_mean = nn.Sequential(
@@ -369,39 +369,65 @@ class AttentionalViewAggregator(nn.Module):
         return getattr(torch.nn, activation)()
 
     def forward(self, outputs):
-        if self.arch_type == "concat":
-            return torch.cat(outputs, dim=1), None
-
+        # if self.arch_type == "concat":
+        #     return torch.cat(outputs, dim=1), None
+        # print("Outputs")
+        # for output in outputs:
+        #     print(output.shape)
         projection_outputs = [
             proj(output) for proj, output in zip(self.projections, outputs)
         ]
+        # print("\nProjection Outputs")
+        # for output in projection_outputs:
+        #     print(output.shape)
         combined_output = torch.stack(projection_outputs, dim=1)
+        # print("\nCombined Output")
+        # print(combined_output.shape)
 
-        if (
-            self.arch_type == "moe_weighted_concat"
-            or self.arch_type == "moe_noised_weighted_concat"
-        ):
-            if (
-                self.weighted_concat_network.gate_input == "projected"
-                or self.weighted_concat_network.gate_input == "both_projected"
-            ):
-                output, avg_weights = self.weighted_concat_network(combined_output)
-            elif self.weighted_concat_network.gate_input == "unprojected":
-                output, avg_weights = self.weighted_concat_network(
-                    torch.cat(outputs, dim=1)
-                )
-            return output, avg_weights
+        # if (
+        #     self.arch_type == "moe_weighted_concat"
+        #     or self.arch_type == "moe_noised_weighted_concat"
+        # ):
+        #     if (
+        #         self.weighted_concat_network.gate_input == "projected"
+        #         or self.weighted_concat_network.gate_input == "both_projected"
+        #     ):
+        #         output, avg_weights = self.weighted_concat_network(combined_output)
+        #     elif self.weighted_concat_network.gate_input == "unprojected":
+        #         output, avg_weights = self.weighted_concat_network(
+        #             torch.cat(outputs, dim=1)
+        #         )
+        #     return output, avg_weights
 
         tmp = torch.nn.functional.normalize(combined_output, dim=-1)
-        w = self.w_before_mean(tmp).mean(0)
+        # print("\nTmp")
+        # print(tmp.shape)
+        w = self.w_before_mean(tmp)
+        # print("\nW Before Mean")
+        # print(w.shape)
+        w = w.mean(0)
+        # print("\nW")
+        # print(w.shape)
         beta = torch.softmax(w, dim=0)
         beta = beta.expand((combined_output.shape[0],) + beta.shape)
+        # print("\nBeta")
+        # print(beta.shape)
         logits = beta * combined_output
+        # print("\nLogits")
+        # print(logits.shape)
         coeffs = beta.squeeze(2)[0]
+        # print("\nCoeffs")
+        # print(coeffs.shape)
         flat_logits = torch.flatten(logits, start_dim=1)
+        # print("\nFlat Logits")
+        # print(flat_logits.shape)
         down_logits = self.down_project(flat_logits)
+        # print("\nDown Logits")
+        # print(down_logits.shape)
         if self.arch_type == "coeff_mlp":
             down_logits = self.shared_task_head(down_logits)
+            # print("\nDown Logits")
+            # print(down_logits.shape)
         return down_logits, coeffs
 
     def load_ckpt(self, path_to_ckpt, prefix="aggregator."):
