@@ -292,7 +292,7 @@ class AttentionalViewAggregator(nn.Module):
     ):
         super().__init__()
         self.arch_type = arch_type
-        logging.info(f"Using DTI-VAE architecture for aggregator")
+        logging.info(f"BioMed Multi-view embedding model")
         logging.info(f"dim_list {dim_list} of Graph2dModel, ImageModel, TextModel")
 
         if self.arch_type == "concat":
