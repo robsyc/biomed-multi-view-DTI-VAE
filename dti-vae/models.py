@@ -120,7 +120,7 @@ class BiomedMultiViewMoleculeEncoder(nn.Module):
 
         return graph_emb, image_emb, text_emb
 
-class AttentionalAggregatorBlock(torch.nn.Module):
+class AttAggregator(torch.nn.Module):
     """Attentional Aggregator - see: https://arxiv.org/abs/2410.19704 and https://arxiv.org/abs/2209.15101
     Aggregates a set of embeddings: m views x batches x input_dim -> batches x input_dim
     """
@@ -130,7 +130,7 @@ class AttentionalAggregatorBlock(torch.nn.Module):
             hidden_dim: int = None,
             output_dim: int = None,
     ):
-        super(AttentionalAggregatorBlock, self).__init__()
+        super(AttAggregator, self).__init__()
         if hidden_dim is None:
             hidden_dim = min(input_dim_list)
         if output_dim is None:
@@ -157,7 +157,7 @@ class AttentionalAggregatorBlock(torch.nn.Module):
         agg = torch.flatten(agg, start_dim=1)
         return self.project_up(agg), coeffs
 
-class AttentionalGeneratorBlock(torch.nn.Module):
+class AttExpander(torch.nn.Module):
     """Attentional Generator - does the opposite of the Attentional Aggregator
     Generates a set of embeddings: batches x input_dim -> m views x batches x input_dim
     """
@@ -167,7 +167,7 @@ class AttentionalGeneratorBlock(torch.nn.Module):
             output_dim_list: list,
             hidden_dim: int = None,
     ):
-        super(AttentionalGeneratorBlock, self).__init__()
+        super(AttExpander, self).__init__()
         if hidden_dim is None:
             hidden_dim = min(output_dim_list)
         self.project_up = nn.Linear(input_dim, hidden_dim * len(output_dim_list))
@@ -202,7 +202,7 @@ class LatentVAEBlock(torch.nn.Module):
         ):
         super(LatentVAEBlock, self).__init__()
         encoder_layers = [
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.SiLU(),
             nn.Dropout(dropout_prob)
@@ -274,7 +274,7 @@ class MoleculeBranch(torch.nn.Module):
         ):
         super(MoleculeBranch, self).__init__()
         self.base_model = BiomedMultiViewMoleculeEncoder()
-        self.aggregator = AttentionalAggregatorBlock(
+        self.aggregator = AttAggregator(
             input_dim_list=[512, 512, 768], # graph, image, text
             hidden_dim=hidden_dim,
             output_dim=hidden_dim,
@@ -286,7 +286,7 @@ class MoleculeBranch(torch.nn.Module):
             latent_dim=latent_dim,
             dropout_prob=dropout_prob,
         )
-        self.generator = AttentionalGeneratorBlock(
+        self.generator = AttExpander(
             input_dim=hidden_dim,
             output_dim_list=[512, 512, 768], # graph, image, text
             hidden_dim=hidden_dim,
@@ -302,7 +302,7 @@ class MoleculeBranch(torch.nn.Module):
         if not compute_loss:
             z, agg_hat = self.vae(agg)
             return z
-        z, agg_hat, recon_loss, loss_kl = self.vae(agg, compute_loss=True)
+        z, agg_hat, _, loss_kl = self.vae(agg, compute_loss=True)
         graph_emb_hat, image_emb_hat, text_emb_hat = self.generator(agg_hat, coeffs)
         loss_recon = torch.nn.functional.mse_loss(graph_emb_hat, graph_emb, reduction='mean')
         loss_recon += torch.nn.functional.mse_loss(image_emb_hat, image_emb, reduction='mean')
@@ -313,8 +313,8 @@ class MoleculeBranch(torch.nn.Module):
 class ProteinBranch(torch.nn.Module):
     def __init__(
             self,
-            hidden_dim: int = 1024,
-            mlp_layers: int = 2,
+            hidden_dim: int = 512,
+            mlp_layers: int = 3,
             latent_dim: int = 1024,
             dropout_prob: float = 0.1,
             **kwargs
@@ -322,11 +322,11 @@ class ProteinBranch(torch.nn.Module):
         super(ProteinBranch, self).__init__()
         self.base_model = T5ProstTargetEncoder()
         self.vae = LatentVAEBlock(
-            input_dim=hidden_dim,
-            hidden_dim=hidden_dim,
-            mlp_layers=mlp_layers,
-            latent_dim=latent_dim,
-            dropout_prob=dropout_prob,
+            input_dim = 1024,
+            hidden_dim = hidden_dim,
+            mlp_layers = mlp_layers,
+            latent_dim = latent_dim,
+            dropout_prob = dropout_prob,
         )
         print(f"base_model: {get_model_params(self.base_model):,}")
         print(f"vae: {get_model_params(self.vae):,}")
