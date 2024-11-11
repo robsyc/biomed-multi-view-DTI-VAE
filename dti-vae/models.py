@@ -124,12 +124,24 @@ class BiomedMultiViewMoleculeEncoder(nn.Module):
         return graph_emb, image_emb, text_emb
 
 class HiddenBlock(nn.Module):
+    """
+    A block of fully connected layers with layer normalization, SiLU activation, and dropout.
+
+    Args:
+        - input_dim: int, the dimension of the input tensor
+        - hidden_dim: int, the dimension of the hidden layer(s)
+        - output_dim: int, the dimension of the output tensor
+        - depth: int, the number of hidden layers
+            - Default: 0 in which case there are 2 linear layers
+            - Example: 1 in which case there are 3 linear layers
+        - dropout_prob: float, the dropout probability (default: 0.1)
+    """
     def __init__(
             self,
             input_dim: int,
             hidden_dim: int,
             output_dim: int,
-            hidden_layers: int = 0,
+            depth: int = 0,
             dropout_prob: float = 0.1,
             **kwargs
     ):
@@ -140,7 +152,7 @@ class HiddenBlock(nn.Module):
             nn.SiLU(),
             nn.Dropout(dropout_prob),
         ]
-        for _ in range(hidden_layers):
+        for _ in range(depth):
             layers.extend([
                 nn.Linear(hidden_dim, hidden_dim),
                 nn.LayerNorm(hidden_dim),
@@ -153,14 +165,33 @@ class HiddenBlock(nn.Module):
         self.block = nn.Sequential(*layers)
 
     def forward(self, x):
+        """
+        Args:
+            - x: torch.Tensor, the input tensor of shape (batch_size, input_dim)
+        Returns:
+            - x: torch.Tensor, the output tensor of shape (batch_size, output_dim)
+        """
         return self.block(x)
         
 class VariationalBlock(nn.Module):
+    """
+    A block of fully connected layers with layer normalization, SiLU activation, and dropout, followed by a variational layer.
+
+    Args:
+        - input_dim: int, the dimension of the input tensor
+        - hidden_dim: int, the dimension of the hidden layer(s)
+        - output_dim: int, the dimension of the output tensor (2x for mean and log-variance)
+        - depth: int, the number of hidden layers
+            - Default: 1 in which case there are 3 linear layers
+            - Example: 2 in which case there are 4 linear layers
+        - dropout_prob: float, the dropout probability (default: 0.1)
+    """
     def __init__(
             self,
             input_dim: int,
             hidden_dim: int,
             output_dim: int,
+            depth: int = 1,
             dropout_prob: float = 0.1,
             **kwargs
     ):
@@ -168,8 +199,8 @@ class VariationalBlock(nn.Module):
         self.encoder = HiddenBlock(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
-            output_dim=2 * output_dim,
-            hidden_layers=1,
+            output_dim=2*output_dim,
+            depth=depth,
             dropout_prob=dropout_prob,
         )
         self.softplus = nn.Softplus()
@@ -186,6 +217,14 @@ class VariationalBlock(nn.Module):
         return dist.rsample()
     
     def forward(self, x, compute_loss: bool = True):
+        """
+        Args:
+            - x: torch.Tensor, the input tensor of shape (batch_size, input_dim)
+            - compute_loss: bool, whether to compute the KL loss (default: True)
+        Returns:
+            - z: torch.Tensor, the output tensor after reparameterization of shape (batch_size, output_dim)
+            - loss_kl: torch.Tensor, the KL loss (default: 0)
+        """
         dist = self.encode(x)
         z = self.reparameterize(dist)
         if not compute_loss:
@@ -197,11 +236,24 @@ class VariationalBlock(nn.Module):
         return z, loss_kl
 
 class AggregatorBlock(nn.Module):
+    """
+    A block that aggregates multiple input tensors into a single tensor using a 2-layer attention mechanism.
+
+    Args:
+        - input_dim_list: list, the list of dimensions of the input tensors
+        - hidden_dim: int, the dimension of the hidden layer(s) (default: min(input_dim_list))
+        - output_dim: int, the dimension of the output tensor (default: min(input_dim_list))
+        - depth: int, the number of hidden layers
+            - Default: 0 in which case there are 2*len(input_dim_list), 2 linear layers = 4 layers (+2 linear att layers)
+            - Example: 1 in which case there are 2*len(input_dim_list), 3 linear layers = 5 layers (+2 linear att layers)
+        - dropout_prob: float, the dropout probability
+    """
     def __init__(
             self,
             input_dim_list: list,
             hidden_dim: int = None,
             output_dim: int = None,
+            depth: int = 0,
             dropout_prob: float = 0.1,
             **kwargs
     ):
@@ -215,7 +267,7 @@ class AggregatorBlock(nn.Module):
                 input_dim=input_dim,
                 hidden_dim=hidden_dim,
                 output_dim=hidden_dim,
-                hidden_layers=0,
+                depth=0,
                 dropout_prob=dropout_prob,
             ) for input_dim in input_dim_list
         ])
@@ -228,11 +280,18 @@ class AggregatorBlock(nn.Module):
             input_dim=hidden_dim * len(input_dim_list),
             hidden_dim=hidden_dim,
             output_dim=output_dim,
-            hidden_layers=0,
+            dapth=depth,
             dropout_prob=dropout_prob,
         )
 
     def forward(self, x_list):
+        """
+        Args:
+            - x_list: list, the list of input tensors with shape (batch_size, input_dim) in input_dim_list
+        Returns:
+            - x: torch.Tensor, the output tensor of shape (batch_size, output_dim)
+            - coeffs: torch.Tensor, the attention coefficients of shape len(input_dim_list)
+        """
         x = [encoder(x) for encoder, x in zip(self.encoder, x_list)]
         x = torch.stack(x, dim=1)
         att = self.attention(F.normalize(x, dim=-1)).mean(dim=0)
@@ -243,11 +302,25 @@ class AggregatorBlock(nn.Module):
         return self.decoder(x), att.squeeze(2)[0]
 
 class ExpanderBlock(nn.Module):
+    """
+    A block that expands a single input tensor into multiple output tensors using a coeff-provided attention mechanism.
+
+    Args:
+        - input_dim: int, the dimension of the input tensor
+        - output_dim_list: list, the list of dimensions of the output tensors
+        - hidden_dim: int, the dimension of the hidden layer(s) (default: min(output_dim_list))
+        - depth: int, the number of hidden layers
+            - Default: 0 in which case there are 2, 2*len(input_dim) linear layers = 4 layers
+            - Example: 1 in which case there are 3, 2*len(input_dim) linear layers = 5 layers
+        - dropout_prob: float, the dropout probability
+    """
+
     def __init__(
             self,
             input_dim: int,
             output_dim_list: list,
             hidden_dim: int = None,
+            depth: int = 0,
             dropout_prob: float = 0.1,
             **kwargs
     ):
@@ -258,7 +331,7 @@ class ExpanderBlock(nn.Module):
             input_dim=input_dim,
             hidden_dim=hidden_dim,
             output_dim=hidden_dim * len(output_dim_list),
-            hidden_layers=0,
+            depth=depth,
             dropout_prob=dropout_prob,
         )
         self.decoder = nn.ModuleList([
@@ -266,12 +339,19 @@ class ExpanderBlock(nn.Module):
                 input_dim=hidden_dim,
                 hidden_dim=hidden_dim,
                 output_dim=output_dim,
-                hidden_layers=0,
+                dapth=0,
                 dropout_prob=dropout_prob,
             ) for output_dim in output_dim_list
         ])
 
     def forward(self, x, coeffs=None):
+        """
+        Args:
+            - x: torch.Tensor, the input tensor of shape (batch_size, input_dim)
+            - coeffs: torch.Tensor, the attention coefficients of shape len(output_dim_list)
+        Returns:
+            - x_list: list, the list of output tensors with shape (batch_size, output_dim) in output_dim_list
+        """
         x = self.encoder(x)
         x = x.view(x.shape[0], len(self.decoder), -1)
         if coeffs is not None:
@@ -292,27 +372,66 @@ class DrugBranch(nn.Module):
         super(DrugBranch, self).__init__()
         self.encoder = BiomedMultiViewMoleculeEncoder()
 
-        self.encodings_to_z = nn.ModuleList([VariationalBlock(input_dim=i, hidden_dim=i, output_dim=i) for i in embeddings_sizes])
-        self.z_aggregator = AggregatorBlock(input_dim_list=embeddings_sizes, hidden_dim=hidden_dim, output_dim=hidden_dim)
-        self.aggrigate_to_z = VariationalBlock(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=latent_dim)
+        self.encodings_to_z = nn.ModuleList([
+            VariationalBlock(
+                input_dim=i, 
+                hidden_dim=hidden_dim,
+                output_dim=i, 
+                depth=1) 
+            for i in embeddings_sizes])
+        self.aggregator = AggregatorBlock(
+            input_dim_list=embeddings_sizes, 
+            hidden_dim=hidden_dim, 
+            output_dim=hidden_dim, 
+            depth=0)
+        self.aggrigate_to_z = VariationalBlock(
+            input_dim=hidden_dim, 
+            hidden_dim=hidden_dim, 
+            output_dim=latent_dim, 
+            depth=1)
 
-        self.z_to_aggrigate = HiddenBlock(input_dim=latent_dim, hidden_dim=hidden_dim, output_dim=hidden_dim, hidden_layers=1)
-        self.z_expander = ExpanderBlock(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim_list=embeddings_sizes)
-        self.z_to_encodings = nn.ModuleList([HiddenBlock(input_dim=i, hidden_dim=i, output_dim=i, hidden_layers=1) for i in embeddings_sizes])
+        self.z_to_aggrigate = HiddenBlock(
+            input_dim=latent_dim, 
+            hidden_dim=hidden_dim, 
+            output_dim=hidden_dim, 
+            depth=1)
+        self.expander = ExpanderBlock(
+            input_dim=hidden_dim, 
+            hidden_dim=hidden_dim, 
+            output_dim_list=embeddings_sizes,
+            depth=0)
+        self.z_to_encodings = nn.ModuleList([
+            HiddenBlock(
+                input_dim=i, 
+                hidden_dim=hidden_dim,
+                output_dim=i, 
+                depth=1) 
+            for i in embeddings_sizes])
 
-        print(f"""\nNumber of parameters per component:
-SMVV encoder: {get_model_params(self.encoder):,}
-Branch up:
-- Encodings to Z: {get_model_params(self.encodings_to_z):,}
-- Z aggregator: {get_model_params(self.z_aggregator):,}
-- Aggrigate to Z: {get_model_params(self.aggrigate_to_z):,}
-Branch down:
-- Z to Aggrigate: {get_model_params(self.z_to_aggrigate):,}
-- Aggrigate expander: {get_model_params(self.z_expander):,}
-- Z to Encodings: {get_model_params(self.z_to_encodings):,}\n""")
+        print(f"""
+Number of parameters per component
+SMVV encoder       : {get_model_params(self.encoder):,}
+Branch up
+- Encodings to Z   : {get_model_params(self.encodings_to_z):,}
+- Aggregator to Z* : {get_model_params(self.aggregator):,}
+- Aggrigate to Z*  : {get_model_params(self.aggrigate_to_z):,}
+Branch down
+- Z* to Aggrigate' : {get_model_params(self.z_to_aggrigate):,}
+- Expander to Z'   : {get_model_params(self.expander):,}
+- Z' to Encodings' : {get_model_params(self.z_to_encodings):,}\n""")
 
     def forward(self, x, compute_loss: bool = True):
+        """
+        Args:
+            - x: list, the list of input tensors of shape (batch_size, input_dim) in embeddings_sizes
+            - compute_loss: bool, whether to compute the loss (default: True)
+        Returns:
+            - z: torch.Tensor, the output tensor of shape (batch_size, latent_dim)
+            - loss_recon: torch.Tensor, the reconstruction loss (default: 0)
+            - loss_kl: torch.Tensor, the KL loss (default: 0)
+        """
         loss_kl = 0
+        loss_recon = 0
         # Encode to list of embeddings with biomed-smmv molecular foundation model
         # SMILES -> 512, 512, 768
         embeddings = self.encoder(x)
@@ -324,7 +443,7 @@ Branch down:
             z_list.append(z)
             loss_kl += kl
         # 2) Aggregate embedding z's into a single aggregated embedding
-        x, coeffs = self.z_aggregator(z_list)
+        x, coeffs = self.aggregator(z_list)
         # 3) Encode aggregated embedding to z w/ VAE
         z, tmp = self.aggrigate_to_z(x, compute_loss=True)
         loss_kl += tmp
@@ -335,33 +454,39 @@ Branch down:
         # 3) Decode z to aggregated embedding
         x = self.z_to_aggrigate(z)
         # 2) Expand aggregated embedding to list of embeddings z's
-        z_list = self.z_expander(x, coeffs)
+        z_list = self.expander(x, coeffs)
         # 1) Decode each z to embedding
-        embeddings_reconstructed = []
         for i, item in enumerate(z_list):
-            emb = self.z_to_encodings[i](item)
-            embeddings_reconstructed.append(emb)
+            loss_recon += F.mse_loss(self.z_to_encodings[i](item), embeddings[i])
         
-        loss_recon = sum(F.mse_loss(emb, emb_recon) for emb, emb_recon in zip(embeddings, embeddings_reconstructed))
         return z, loss_recon, loss_kl
 
-class ProteinBranch(nn.Module):
+class TargetBranch(nn.Module):
     def __init__(
             self,
             input_dim: int = 1024,
-            hidden_dim: int = 1024,
+            hidden_dim: int = 512,
             latent_dim: int = 1024,
             ):
-        super(ProteinBranch, self).__init__()
+        super(TargetBranch, self).__init__()
         self.encoder = T5ProstTargetEncoder()
-        self.encodings_to_z = VariationalBlock(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=latent_dim)
-        self.z_to_encodings = HiddenBlock(input_dim=latent_dim, hidden_dim=hidden_dim, output_dim=input_dim, hidden_layers=1)
+        self.encodings_to_z = VariationalBlock(
+            input_dim=input_dim, 
+            hidden_dim=hidden_dim, 
+            output_dim=latent_dim, 
+            depth=2)
+        self.z_to_encodings = HiddenBlock(
+            input_dim=latent_dim, 
+            hidden_dim=hidden_dim, 
+            output_dim=input_dim, 
+            dpeth=2)
 
-        print(f"""\nNumber of parameters per component:
+        print(f"""
+Number of parameters per component
 Protein encoder: {get_model_params(self.encoder):,}
-Branch up:
+Branch up
 - Encodings to Z: {get_model_params(self.encodings_to_z):,}
-Branch down:
+Branch down
 - Z to Encodings: {get_model_params(self.z_to_encodings):,}\n""")
         
     def forward(self, x, compute_loss: bool = True):
@@ -370,16 +495,42 @@ Branch down:
         x = self.encoder(x)
 
         # Encode embedding to z w/ VAE
-        # 1024 -> 1024
         z, loss_kl = self.encodings_to_z(x, compute_loss=True)
 
         if not compute_loss:
             return z
 
         # Decode z to embedding
-        # 1024 -> 1024
         x_reconstructed = self.z_to_encodings(z)
         
         # Reconstruct embedding
         loss_recon = F.mse_loss(x, x_reconstructed)
         return z, loss_recon, loss_kl
+
+class MultiBranchDTI(nn.Module):
+    def __init__(
+            self,
+            hidden_dim_drug: int = 1024,
+            hidden_dim_target: int = 1024,
+            latent_dim: int = 1024,
+            ):
+        super(MultiBranchDTI, self).__init__()
+        self.drug_branch = DrugBranch(hidden_dim=hidden_dim_drug, latent_dim=latent_dim)
+        self.target_branch = TargetBranch(hidden_dim=hidden_dim_target, latent_dim=latent_dim)
+
+        print(f"""\nNumber of parameters per component:
+Drug branch: {get_model_params(self.drug_branch):,}
+Target branch: {get_model_params(self.target_branch):,}\n""")
+        
+    def forward(self, drug, protein, y):
+        # Forward pass through both branches
+        z_drug, loss_recon_drug, loss_kl_drug = self.drug_branch(drug, compute_loss=True)
+        z_target, loss_recon_target, loss_kl_target = self.target_branch(protein, compute_loss=True)
+
+        # Compute interaction prediction & loss
+        y_hat = torch.sum(z_drug * z_target, dim=1)
+        loss_mse = F.mse_loss(y_hat, y)
+        loss_kl = loss_kl_drug + loss_kl_target
+        loss_recon = loss_recon_drug + loss_recon_target
+        return y_hat, loss_mse, loss_kl, loss_recon
+
