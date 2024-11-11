@@ -15,6 +15,9 @@ from bmfm_sm.predictive.data_modules.text_finetune_dataset import TextFinetuneDa
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 AA_SEQ_CAP = 20 # TODO: increase this on GPU
 
+def get_model_params(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 class T5ProstTargetEncoder(nn.Module):
     def __init__(self, verbose: bool = False):
         super(T5ProstTargetEncoder, self).__init__()
@@ -120,225 +123,263 @@ class BiomedMultiViewMoleculeEncoder(nn.Module):
 
         return graph_emb, image_emb, text_emb
 
-class AttAggregator(torch.nn.Module):
-    """Attentional Aggregator - see: https://arxiv.org/abs/2410.19704 and https://arxiv.org/abs/2209.15101
-    Aggregates a set of embeddings: m views x batches x input_dim -> batches x input_dim
-    """
+class HiddenBlock(nn.Module):
     def __init__(
-            self, 
-            input_dim_list: list,
-            hidden_dim: int = None,
-            output_dim: int = None,
-    ):
-        super(AttAggregator, self).__init__()
-        if hidden_dim is None:
-            hidden_dim = min(input_dim_list)
-        if output_dim is None:
-            output_dim = min(input_dim_list)
-        
-        self.project_down = nn.ModuleList([
-            nn.Linear(input_dim, hidden_dim) for input_dim in input_dim_list
-        ])
-        self.attention = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, 1, bias=False),
-        )
-        self.project_up = nn.Linear(hidden_dim * len(input_dim_list), output_dim)
-
-    def forward(self, x_list):
-        x_list = [project(x) for project, x in zip(self.project_down, x_list)]
-        x = torch.stack(x_list, dim=1)
-        att = self.attention(F.normalize(x, dim=-1)).mean(dim=0)
-        att = F.softmax(att, dim=0)
-        att = att.expand((x.shape[0],) + att.shape)
-        coeffs = att.squeeze(2)[0]
-        agg = att * x
-        agg = torch.flatten(agg, start_dim=1)
-        return self.project_up(agg), coeffs
-
-class AttExpander(torch.nn.Module):
-    """Attentional Generator - does the opposite of the Attentional Aggregator
-    Generates a set of embeddings: batches x input_dim -> m views x batches x input_dim
-    """
-    def __init__(
-            self, 
+            self,
             input_dim: int,
-            output_dim_list: list,
-            hidden_dim: int = None,
-    ):
-        super(AttExpander, self).__init__()
-        if hidden_dim is None:
-            hidden_dim = min(output_dim_list)
-        self.project_up = nn.Linear(input_dim, hidden_dim * len(output_dim_list))
-        self.project_down = nn.ModuleList([
-            nn.Linear(hidden_dim, output_dim) for output_dim in output_dim_list
-        ])
-
-    def forward(self, x, coeffs=None):
-        x = self.project_up(x)
-        x = x.view(x.shape[0], len(self.project_down), -1)
-        if coeffs is not None:
-            att = coeffs.unsqueeze(1)
-            att = att.expand((x.shape[0],) + att.shape)
-            x = x * att
-
-        x = [project(x[:, i]) for i, project in enumerate(self.project_down)]
-        return x
-
-class LatentVAEBlock(torch.nn.Module):
-    """VAE block - see: https://hunterheidenreich.com/posts/modern-variational-autoencoder-in-pytorch/
-    Encodes & decodes a fixed-length embedding: batches x input_dim -> batches x input_dim
-    Generates a latent representation: batches x latent_dim
-    """
-    def __init__(
-            self, 
-            input_dim: int = 512, 
-            hidden_dim: int = 512,
-            mlp_layers: int = 2,
-            latent_dim: int = 1024,
+            hidden_dim: int,
+            output_dim: int,
+            hidden_layers: int = 0,
             dropout_prob: float = 0.1,
             **kwargs
-        ):
-        super(LatentVAEBlock, self).__init__()
-        encoder_layers = [
+    ):
+        super(HiddenBlock, self).__init__()
+        layers = [
             nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.SiLU(),
-            nn.Dropout(dropout_prob)
+            nn.Dropout(dropout_prob),
         ]
-        for _ in range(mlp_layers):
-            encoder_layers.extend([
+        for _ in range(hidden_layers):
+            layers.extend([
                 nn.Linear(hidden_dim, hidden_dim),
                 nn.LayerNorm(hidden_dim),
                 nn.SiLU(),
-                nn.Dropout(dropout_prob)
+                nn.Dropout(dropout_prob),
             ])
-        encoder_layers.append(nn.Linear(hidden_dim, 2 * latent_dim))
-        self.encoder = nn.Sequential(*encoder_layers)
+        layers.extend([
+            nn.Linear(hidden_dim, output_dim),
+        ])
+        self.block = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.block(x)
         
+class VariationalBlock(nn.Module):
+    def __init__(
+            self,
+            input_dim: int,
+            hidden_dim: int,
+            output_dim: int,
+            dropout_prob: float = 0.1,
+            **kwargs
+    ):
+        super(VariationalBlock, self).__init__()
+        self.encoder = HiddenBlock(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            output_dim=2 * output_dim,
+            hidden_layers=1,
+            dropout_prob=dropout_prob,
+        )
         self.softplus = nn.Softplus()
         self.silu = nn.SiLU()
 
-        decoder_layers = [
-            nn.Linear(latent_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(dropout_prob)
-        ]
-        for _ in range(mlp_layers):
-            decoder_layers.extend([
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.LayerNorm(hidden_dim),
-                nn.SiLU(),
-                nn.Dropout(dropout_prob)
-            ])
-        decoder_layers.append(nn.Linear(hidden_dim, input_dim))
-        self.decoder = nn.Sequential(*decoder_layers)
-
-    def encode(self, x, eps: float = 1e-5):
+    def encode(self, x):
         x = self.encoder(x)
         mu, log_var = torch.chunk(x, 2, dim=-1)
-        scale = self.softplus(log_var) + eps
+        scale = self.softplus(log_var)
         scale_tril = torch.diag_embed(scale)
         return torch.distributions.MultivariateNormal(mu, scale_tril)
     
     def reparameterize(self, dist):
         return dist.rsample()
     
-    def decode(self, z):
-        return self.decoder(z)
-    
-    def forward(self, x, compute_loss: bool = False):
+    def forward(self, x, compute_loss: bool = True):
         dist = self.encode(x)
         z = self.reparameterize(dist)
-        x_hat = self.decode(z)
         if not compute_loss:
-            return z, x_hat
-        loss_recon = torch.nn.functional.mse_loss(x_hat, x, reduction='mean')
-        std_normal = torch.distributions.MultivariateNormal(
+            return z
+        loss_kl = torch.distributions.kl_divergence(dist, torch.distributions.MultivariateNormal(
             torch.zeros_like(z, device=z.device),
             scale_tril=torch.eye(z.shape[-1], device=z.device).unsqueeze(0).expand(z.shape[0], -1, -1),
-        )
-        loss_kl = torch.distributions.kl_divergence(dist, std_normal).mean()
-        return z, x_hat, loss_recon, loss_kl
+        )).mean()
+        return z, loss_kl
 
-class MoleculeBranch(torch.nn.Module):
+class AggregatorBlock(nn.Module):
     def __init__(
             self,
-            hidden_dim: int = 512,
-            mlp_layers: int = 2,
-            latent_dim: int = 1024,
+            input_dim_list: list,
+            hidden_dim: int = None,
+            output_dim: int = None,
             dropout_prob: float = 0.1,
             **kwargs
-        ):
-        super(MoleculeBranch, self).__init__()
-        self.base_model = BiomedMultiViewMoleculeEncoder()
-        self.aggregator = AttAggregator(
-            input_dim_list=[512, 512, 768], # graph, image, text
-            hidden_dim=hidden_dim,
-            output_dim=hidden_dim,
+    ):
+        super(AggregatorBlock, self).__init__()
+        if hidden_dim is None:
+            hidden_dim = min(input_dim_list)
+        if output_dim is None:
+            output_dim = min(input_dim_list)
+        self.encoder = nn.ModuleList([
+            HiddenBlock(
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                output_dim=hidden_dim,
+                hidden_layers=0,
+                dropout_prob=dropout_prob,
+            ) for input_dim in input_dim_list
+        ])
+        self.attention = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1, bias=False),
         )
-        self.vae = LatentVAEBlock(
-            input_dim=hidden_dim,
+        self.decoder = HiddenBlock(
+            input_dim=hidden_dim * len(input_dim_list),
             hidden_dim=hidden_dim,
-            mlp_layers=mlp_layers,
-            latent_dim=latent_dim,
+            output_dim=output_dim,
+            hidden_layers=0,
             dropout_prob=dropout_prob,
         )
-        self.generator = AttExpander(
-            input_dim=hidden_dim,
-            output_dim_list=[512, 512, 768], # graph, image, text
-            hidden_dim=hidden_dim,
-        )
-        print(f"base_model: {get_model_params(self.base_model):,}")
-        print(f"aggregator: {get_model_params(self.aggregator):,}")
-        print(f"vae: {get_model_params(self.vae):,}")
-        print(f"generator: {get_model_params(self.generator):,}")
 
-    def forward(self, smiles, compute_loss: bool = False):
-        graph_emb, image_emb, text_emb = self.base_model(smiles)
-        agg, coeffs = self.aggregator([graph_emb, image_emb, text_emb])
-        if not compute_loss:
-            z, agg_hat = self.vae(agg)
-            return z
-        z, agg_hat, _, loss_kl = self.vae(agg, compute_loss=True)
-        graph_emb_hat, image_emb_hat, text_emb_hat = self.generator(agg_hat, coeffs)
-        loss_recon = torch.nn.functional.mse_loss(graph_emb_hat, graph_emb, reduction='mean')
-        loss_recon += torch.nn.functional.mse_loss(image_emb_hat, image_emb, reduction='mean')
-        loss_recon += torch.nn.functional.mse_loss(text_emb_hat, text_emb, reduction='mean')
-        loss = loss_recon + loss_kl
-        return z, coeffs, loss
-    
-class ProteinBranch(torch.nn.Module):
+    def forward(self, x_list):
+        x = [encoder(x) for encoder, x in zip(self.encoder, x_list)]
+        x = torch.stack(x, dim=1)
+        att = self.attention(F.normalize(x, dim=-1)).mean(dim=0)
+        att = F.softmax(att, dim=0)
+        att = att.expand((x.shape[0],) + att.shape)
+        x = att * x
+        x = torch.flatten(x, start_dim=1)
+        return self.decoder(x), att.squeeze(2)[0]
+
+class ExpanderBlock(nn.Module):
     def __init__(
             self,
-            hidden_dim: int = 512,
-            mlp_layers: int = 3,
-            latent_dim: int = 1024,
+            input_dim: int,
+            output_dim_list: list,
+            hidden_dim: int = None,
             dropout_prob: float = 0.1,
             **kwargs
-        ):
-        super(ProteinBranch, self).__init__()
-        self.base_model = T5ProstTargetEncoder()
-        self.vae = LatentVAEBlock(
-            input_dim = 1024,
-            hidden_dim = hidden_dim,
-            mlp_layers = mlp_layers,
-            latent_dim = latent_dim,
-            dropout_prob = dropout_prob,
+    ):
+        super(ExpanderBlock, self).__init__()
+        if hidden_dim is None:
+            hidden_dim = min(output_dim_list)
+        self.encoder = HiddenBlock(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            output_dim=hidden_dim * len(output_dim_list),
+            hidden_layers=0,
+            dropout_prob=dropout_prob,
         )
-        print(f"base_model: {get_model_params(self.base_model):,}")
-        print(f"vae: {get_model_params(self.vae):,}")
+        self.decoder = nn.ModuleList([
+            HiddenBlock(
+                input_dim=hidden_dim,
+                hidden_dim=hidden_dim,
+                output_dim=output_dim,
+                hidden_layers=0,
+                dropout_prob=dropout_prob,
+            ) for output_dim in output_dim_list
+        ])
 
-    def forward(self, sequences, compute_loss: bool = False):
-        x = self.base_model(sequences)
+    def forward(self, x, coeffs=None):
+        x = self.encoder(x)
+        x = x.view(x.shape[0], len(self.decoder), -1)
+        if coeffs is not None:
+            att = coeffs.unsqueeze(1)
+            att = att.expand((x.shape[0],) + att.shape)
+            x = x * att
+
+        x = [project(x[:, i]) for i, project in enumerate(self.decoder)]
+        return x
+
+class DrugBranch(nn.Module):
+    def __init__(
+            self,
+            embeddings_sizes: list = [512, 512, 768],
+            hidden_dim: int = 512,
+            latent_dim: int = 1024,
+            ):
+        super(DrugBranch, self).__init__()
+        self.encoder = BiomedMultiViewMoleculeEncoder()
+
+        self.encodings_to_z = nn.ModuleList([VariationalBlock(input_dim=i, hidden_dim=i, output_dim=i) for i in embeddings_sizes])
+        self.z_aggregator = AggregatorBlock(input_dim_list=embeddings_sizes, hidden_dim=hidden_dim, output_dim=hidden_dim)
+        self.aggrigate_to_z = VariationalBlock(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=latent_dim)
+
+        self.z_to_aggrigate = HiddenBlock(input_dim=latent_dim, hidden_dim=hidden_dim, output_dim=hidden_dim, hidden_layers=1)
+        self.z_expander = ExpanderBlock(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim_list=embeddings_sizes)
+        self.z_to_encodings = nn.ModuleList([HiddenBlock(input_dim=i, hidden_dim=i, output_dim=i, hidden_layers=1) for i in embeddings_sizes])
+
+        print(f"""\nNumber of parameters per component:
+SMVV encoder: {get_model_params(self.encoder):,}
+Branch up:
+- Encodings to Z: {get_model_params(self.encodings_to_z):,}
+- Z aggregator: {get_model_params(self.z_aggregator):,}
+- Aggrigate to Z: {get_model_params(self.aggrigate_to_z):,}
+Branch down:
+- Z to Aggrigate: {get_model_params(self.z_to_aggrigate):,}
+- Aggrigate expander: {get_model_params(self.z_expander):,}
+- Z to Encodings: {get_model_params(self.z_to_encodings):,}\n""")
+
+    def forward(self, x, compute_loss: bool = True):
+        loss_kl = 0
+        # Encode to list of embeddings with biomed-smmv molecular foundation model
+        # SMILES -> 512, 512, 768
+        embeddings = self.encoder(x)
+
+        # 1) Encode each embedding to z w/ VAE & sum KL loss
+        z_list = []
+        for i, emb in enumerate(embeddings):
+            z, kl = self.encodings_to_z[i](emb, compute_loss=True)
+            z_list.append(z)
+            loss_kl += kl
+        # 2) Aggregate embedding z's into a single aggregated embedding
+        x, coeffs = self.z_aggregator(z_list)
+        # 3) Encode aggregated embedding to z w/ VAE
+        z, tmp = self.aggrigate_to_z(x, compute_loss=True)
+        loss_kl += tmp
+
         if not compute_loss:
-            z, x_hat = self.vae(x)
-            return z, x_hat
-        z, x_hat, loss_recon, loss_kl = self.vae(x, compute_loss=True)
-        loss = loss_recon + loss_kl
-        return z, loss
+            return z
+
+        # 3) Decode z to aggregated embedding
+        x = self.z_to_aggrigate(z)
+        # 2) Expand aggregated embedding to list of embeddings z's
+        z_list = self.z_expander(x, coeffs)
+        # 1) Decode each z to embedding
+        embeddings_reconstructed = []
+        for i, item in enumerate(z_list):
+            emb = self.z_to_encodings[i](item)
+            embeddings_reconstructed.append(emb)
         
-def get_model_params(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+        loss_recon = sum(F.mse_loss(emb, emb_recon) for emb, emb_recon in zip(embeddings, embeddings_reconstructed))
+        return z, loss_recon, loss_kl
+
+class ProteinBranch(nn.Module):
+    def __init__(
+            self,
+            input_dim: int = 1024,
+            hidden_dim: int = 1024,
+            latent_dim: int = 1024,
+            ):
+        super(ProteinBranch, self).__init__()
+        self.encoder = T5ProstTargetEncoder()
+        self.encodings_to_z = VariationalBlock(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=latent_dim)
+        self.z_to_encodings = HiddenBlock(input_dim=latent_dim, hidden_dim=hidden_dim, output_dim=input_dim, hidden_layers=1)
+
+        print(f"""\nNumber of parameters per component:
+Protein encoder: {get_model_params(self.encoder):,}
+Branch up:
+- Encodings to Z: {get_model_params(self.encodings_to_z):,}
+Branch down:
+- Z to Encodings: {get_model_params(self.z_to_encodings):,}\n""")
+        
+    def forward(self, x, compute_loss: bool = True):
+        # Encode protein sequence to embedding
+        # AA sequence -> 1024
+        x = self.encoder(x)
+
+        # Encode embedding to z w/ VAE
+        # 1024 -> 1024
+        z, loss_kl = self.encodings_to_z(x, compute_loss=True)
+
+        if not compute_loss:
+            return z
+
+        # Decode z to embedding
+        # 1024 -> 1024
+        x_reconstructed = self.z_to_encodings(z)
+        
+        # Reconstruct embedding
+        loss_recon = F.mse_loss(x, x_reconstructed)
+        return z, loss_recon, loss_kl
