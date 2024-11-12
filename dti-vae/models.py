@@ -79,7 +79,7 @@ class BiomedMultiViewMoleculeEncoder(nn.Module):
         biomed_smmv_pretrained = SmallMoleculeMultiViewModel.from_pretrained(
             LateFusionStrategy.ATTENTIONAL,
             model_path='../data_root/bmfm_model_dir/biomed-smmv-base.pth',
-            inference_mode=False,
+            inference_mode=True,
         )
         # biomed_smmv_pretrained = SmallMoleculeMultiViewModel.from_pretrained(
         #     LateFusionStrategy.ATTENTIONAL,
