@@ -13,13 +13,12 @@ from bmfm_sm.predictive.data_modules.image_finetune_dataset import ImageFinetune
 from bmfm_sm.predictive.data_modules.text_finetune_dataset import TextFinetuneDataPipeline
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-AA_SEQ_CAP = 20 # TODO: increase this on GPU
 
 def get_model_params(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 class T5ProstTargetEncoder(nn.Module):
-    def __init__(self, verbose: bool = False):
+    def __init__(self, verbose: bool = False, AA_SEQ_CAP: int = 20):
         super(T5ProstTargetEncoder, self).__init__()
         self.verbose = verbose
         self.tokenizer = T5Tokenizer.from_pretrained('../data_root/ProstT5_model_dir', do_lower_case=False)
@@ -370,7 +369,7 @@ class DrugBranch(nn.Module):
             latent_dim: int = 1024,
             ):
         super(DrugBranch, self).__init__()
-        self.encoder = BiomedMultiViewMoleculeEncoder()
+        # self.encoder = BiomedMultiViewMoleculeEncoder() # we use pre-compued embeddings!
 
         self.encodings_to_z = nn.ModuleList([
             VariationalBlock(
@@ -433,12 +432,12 @@ Branch down
         loss_kl = 0
         loss_recon = 0
         # Encode to list of embeddings with biomed-smmv molecular foundation model
-        # SMILES -> 512, 512, 768
-        embeddings = self.encoder(x)
+        # SMILES -> 512, 512, 768 (graph, image, text)
+        # x = self.encoder(x) # we have pre-computed these embeddings!
 
         # 1) Encode each embedding to z w/ VAE & sum KL loss
         z_list = []
-        for i, emb in enumerate(embeddings):
+        for i, emb in enumerate(x):
             z, kl = self.encodings_to_z[i](emb, compute_loss=True)
             z_list.append(z)
             loss_kl += kl
@@ -469,7 +468,7 @@ class TargetBranch(nn.Module):
             latent_dim: int = 1024,
             ):
         super(TargetBranch, self).__init__()
-        self.encoder = T5ProstTargetEncoder()
+        # self.encoder = T5ProstTargetEncoder() # we use pre-compued embeddings!
         self.encodings_to_z = VariationalBlock(
             input_dim=input_dim, 
             hidden_dim=hidden_dim, 
@@ -481,9 +480,9 @@ class TargetBranch(nn.Module):
             output_dim=input_dim, 
             dpeth=2)
 
+# Protein encoder: {get_model_params(self.encoder):,}
         print(f"""
 Number of parameters per component
-Protein encoder: {get_model_params(self.encoder):,}
 Branch up
 - Encodings to Z: {get_model_params(self.encodings_to_z):,}
 Branch down
@@ -492,7 +491,7 @@ Branch down
     def forward(self, x, compute_loss: bool = True):
         # Encode protein sequence to embedding
         # AA sequence -> 1024
-        x = self.encoder(x)
+        # x = self.encoder(x) # we have pre-computed these embeddings!
 
         # Encode embedding to z w/ VAE
         z, loss_kl = self.encodings_to_z(x, compute_loss=True)
