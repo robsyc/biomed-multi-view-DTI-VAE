@@ -21,6 +21,7 @@ class T5ProstTargetEncoder(nn.Module):
     def __init__(self, verbose: bool = False, AA_SEQ_CAP: int = 20):
         super(T5ProstTargetEncoder, self).__init__()
         self.verbose = verbose
+        self.AA_SEQ_CAP = AA_SEQ_CAP
         self.tokenizer = T5Tokenizer.from_pretrained('../data_root/ProstT5_model_dir', do_lower_case=False)
         self.model = T5EncoderModel.from_pretrained("../data_root/ProstT5_model_dir").to(device)
         # tokenizer = T5Tokenizer.from_pretrained('Rostlab/ProstT5', do_lower_case=False).to(device)
@@ -38,7 +39,7 @@ class T5ProstTargetEncoder(nn.Module):
             print("Max length sequence:", max(len(seq) for seq in sequences))
 
         # TODO: keep larger sequences on GPU!
-        sequences = [sequence[:AA_SEQ_CAP] for sequence in sequences]
+        sequences = [sequence[:self.AA_SEQ_CAP] for sequence in sequences]
         sequences = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))).upper() for sequence in sequences]
         sequences = ["<AA2fold> " + s for s in sequences]
 
@@ -69,7 +70,8 @@ class T5ProstTargetEncoder(nn.Module):
 
 class BiomedMultiViewMoleculeEncoder(nn.Module):
     def __init__(
-        self
+        self,
+        inference_mode: bool = True,
         # hugging_face: bool = False
     ):
         super(BiomedMultiViewMoleculeEncoder, self).__init__()
@@ -78,7 +80,7 @@ class BiomedMultiViewMoleculeEncoder(nn.Module):
         biomed_smmv_pretrained = SmallMoleculeMultiViewModel.from_pretrained(
             LateFusionStrategy.ATTENTIONAL,
             model_path='../data_root/bmfm_model_dir/biomed-smmv-base.pth',
-            inference_mode=True,
+            inference_mode=inference_mode,
         )
         # biomed_smmv_pretrained = SmallMoleculeMultiViewModel.from_pretrained(
         #     LateFusionStrategy.ATTENTIONAL,
@@ -433,11 +435,12 @@ Branch down
         loss_recon = 0
         # Encode to list of embeddings with biomed-smmv molecular foundation model
         # SMILES -> 512, 512, 768 (graph, image, text)
-        # x = self.encoder(x) # we have pre-computed these embeddings!
+        # embeddings = self.encoder(x) # we have pre-computed these embeddings!
+        embeddings = x
 
         # 1) Encode each embedding to z w/ VAE & sum KL loss
         z_list = []
-        for i, emb in enumerate(x):
+        for i, emb in enumerate(embeddings):
             z, kl = self.encodings_to_z[i](emb, compute_loss=True)
             z_list.append(z)
             loss_kl += kl
